@@ -28,6 +28,65 @@ body {
     display: none;
 }
 
+.credential-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 9999;
+}
+
+.credential-overlay.hidden {
+    display: none;
+}
+
+.credential-overlay__card {
+    background: #ffffff;
+    color: #0f172a;
+    padding: 32px;
+    border-radius: 16px;
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 20px 40px rgba(15, 23, 42, 0.4);
+}
+
+.credential-overlay__card h2 {
+    font-size: 24px;
+    margin-bottom: 12px;
+}
+
+.credential-overlay__message {
+    margin-bottom: 12px;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.credential-overlay__note {
+    font-size: 13px;
+    color: #475569;
+    margin-bottom: 20px;
+    line-height: 1.4;
+}
+
+.credential-overlay__actions button {
+    background: #3b82f6;
+    color: #ffffff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 9999px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s ease;
+}
+
+.credential-overlay__actions button:hover {
+    background: #2563eb;
+}
+
 /* Login Screen */
 #login-screen {
     justify-content: center;

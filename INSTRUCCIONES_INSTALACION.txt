@@ -1,4 +1,4 @@
-🚀 PRIME OUTBOUND BOT - INSTRUCCIONES DE INSTALACIÓN
+🚀 md outbound - INSTRUCCIONES DE INSTALACIÓN
 ================================================================
 
 📦 INSTALACIÓN DE LA EXTENSIÓN:
@@ -52,6 +52,16 @@
 - No modificar archivos de la extensión
 - Usar solo en cuentas de Instagram autorizadas
 
+🧪 PRUEBAS MANUALES SUGERIDAS PARA EQUIPO Y OWNER:
+1. Abrir chrome://extensions y cargar la carpeta del proyecto en modo desarrollador.
+2. Abrir la pantalla de opciones desde la tarjeta de la extensión o desde el menú contextual.
+3. Guardar tu email en "Propietario actual" y verificar que quedás como owner por defecto.
+4. Agregar un miembro nuevo como "Miembro" y confirmar que aparece en la tabla.
+5. Probar cambiar su rol a owner con el botón "Hacer owner" y validar el mensaje de confirmación.
+6. Intentar eliminar al owner actual para comprobar que se bloquea la acción.
+7. Eliminar un miembro estándar y verificar que desaparece de la lista tras confirmar.
+8. Recargar la página de opciones para confirmar que los datos persisten en el almacenamiento local.
+
 ================================================================
-Prime Outbound Bot - Versión 26.0
+md outbound - Versión 26.0
 ================================================================
