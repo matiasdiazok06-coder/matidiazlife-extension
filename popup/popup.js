@@ -21,7 +21,7 @@ function showDebug(message, type = 'info') {
 
 // SISTEMA LIMPIO: Inicialización simplificada
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🚀 DOM Content Loaded - Iniciando Prime Outbound Bot');
+    console.log('🚀 DOM Content Loaded - Iniciando md outbound');
     showDebug('DOM Content Loaded', 'info');
     
     // Crear instancia del popup
