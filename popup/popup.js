@@ -19,6 +19,9 @@ function showDebug(message, type = 'info') {
     }
 }
 
+const CURRENT_USER_STORAGE_KEY = 'matidiaz_current_user';
+const CURRENT_CREDENTIAL_STORAGE_KEY = 'matidiaz_current_credential';
+
 // SISTEMA LIMPIO: Inicialización simplificada
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('🚀 DOM Content Loaded - Iniciando md outbound');
@@ -58,15 +61,34 @@ class InstagramPopupScript {
         this.isTeamMember = false;         // Si es parte de un equipo
         this.isTeamAdmin = false;          // Si es el administrador del equipo
         this.teamAdminDeviceId = null;     // Device ID del administrador
-        
+
+        // Control de acceso por credenciales locales
+        this.teamAccessGranted = false;
+        this.teamOwnerBypass = false;
+        this.teamAccessInfo = null;
+        this.teamCredential = '';
+        this.teamEmail = null;
+
         console.log('🔧 Constructor completado, llamando init...');
         console.log('🔧 POPUP CONSTRUCTOR EJECUTADO - VERIFICAR ESTE LOG');
         this.init();
     }
 
-    init() {
+    async init() {
         console.log('🔧 Init iniciando...');
         console.log('🔧 POPUP INIT EJECUTADO - VERIFICAR ESTE LOG');
+        try {
+            const accesoValido = await this.enforceTeamCredentialAccess();
+            if (!accesoValido) {
+                this.lockExtensionForCredential();
+                return;
+            }
+        } catch (error) {
+            console.error('❌ Error verificando credenciales del equipo:', error);
+            this.lockExtensionForCredential(error.message);
+            return;
+        }
+
         this.initializeFirebase();
         this.setupAuthStateListener();
         this.setupEventListeners();
@@ -104,8 +126,141 @@ class InstagramPopupScript {
         //         }
         //     }
         // }, 30000); // Cada 30 segundos
-        
+
         console.log('🔧 Popup inicializado');
+    }
+
+    async enforceTeamCredentialAccess() {
+        try {
+            const resultado = await this.readLocalStorage([CURRENT_USER_STORAGE_KEY, CURRENT_CREDENTIAL_STORAGE_KEY]);
+            const email = typeof resultado[CURRENT_USER_STORAGE_KEY] === 'string'
+                ? resultado[CURRENT_USER_STORAGE_KEY].trim().toLowerCase()
+                : '';
+            const credential = typeof resultado[CURRENT_CREDENTIAL_STORAGE_KEY] === 'string'
+                ? resultado[CURRENT_CREDENTIAL_STORAGE_KEY].trim().toUpperCase()
+                : '';
+
+            this.teamEmail = email;
+            this.teamCredential = credential;
+
+            if (!email) {
+                this.teamAccessInfo = { reason: 'Guardá tu email desde la página de opciones para validar el acceso.' };
+                showDebug('Bloqueado: falta email local', 'error');
+                return false;
+            }
+
+            const respuesta = await this.sendRuntimeMessage({
+                action: 'matidiaz_validateCredential',
+                payload: { email, credential }
+            });
+
+            if (!respuesta || respuesta.success !== true) {
+                const motivo = respuesta?.error || 'No se pudo validar tu credencial local.';
+                this.teamAccessInfo = { reason: motivo };
+                showDebug(`Bloqueado: ${motivo}`, 'error');
+                return false;
+            }
+
+            const datos = respuesta.data || {};
+            if (!datos.valid) {
+                const motivo = datos.reason || 'Credencial inválida o faltante.';
+                this.teamAccessInfo = { reason: motivo };
+                showDebug(`Bloqueado: ${motivo}`, 'error');
+                return false;
+            }
+
+            this.teamAccessGranted = true;
+            this.teamOwnerBypass = Boolean(datos.ownerBypass);
+            this.teamAccessInfo = { reason: 'Acceso concedido' };
+            showDebug('Acceso al equipo validado correctamente.', 'success');
+            return true;
+        } catch (error) {
+            this.teamAccessInfo = { reason: error.message };
+            showDebug(`Error al validar credenciales: ${error.message}`, 'error');
+            throw error;
+        }
+    }
+
+    lockExtensionForCredential(motivoExtra) {
+        const mensaje = motivoExtra || this.teamAccessInfo?.reason || 'Debés configurar tus credenciales locales para usar md outbound.';
+        this.teamAccessGranted = false;
+        const screens = document.querySelectorAll('.screen');
+        screens.forEach(screen => {
+            if (screen) {
+                screen.classList.add('hidden');
+            }
+        });
+
+        let overlay = document.getElementById('matidiaz-credential-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'matidiaz-credential-overlay';
+            overlay.className = 'credential-overlay';
+            overlay.innerHTML = `
+                <div class="credential-overlay__card">
+                    <h2>Credencial requerida</h2>
+                    <p class="credential-overlay__message"></p>
+                    <p class="credential-overlay__note">Pedile al owner tu credencial (formato MATI-XXXXXX-AAAA) y guardala desde la pantalla de Equipo.</p>
+                    <div class="credential-overlay__actions">
+                        <button type="button" id="abrir-opciones-credencial">Abrir opciones</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(overlay);
+
+            const boton = overlay.querySelector('#abrir-opciones-credencial');
+            if (boton) {
+                boton.addEventListener('click', () => {
+                    if (chrome.runtime.openOptionsPage) {
+                        chrome.runtime.openOptionsPage();
+                    } else {
+                        window.open(chrome.runtime.getURL('options/options.html'), '_blank');
+                    }
+                });
+            }
+        }
+
+        const mensajeElemento = overlay.querySelector('.credential-overlay__message');
+        if (mensajeElemento) {
+            mensajeElemento.textContent = mensaje;
+        }
+
+        overlay.classList.remove('hidden');
+        showDebug(`Acceso bloqueado por credenciales: ${mensaje}`, 'error');
+    }
+
+    readLocalStorage(claves) {
+        return new Promise((resolve, reject) => {
+            try {
+                const keys = Array.isArray(claves) ? claves : [claves];
+                chrome.storage.local.get(keys, (resultado) => {
+                    const error = chrome.runtime.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+                    resolve(resultado);
+                });
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    sendRuntimeMessage(payload) {
+        return new Promise((resolve, reject) => {
+            try {
+                chrome.runtime.sendMessage(payload, (response) => {
+                    const error = chrome.runtime.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+                    resolve(response);
+                });
+            } catch (error) {
+                reject(error);
+            }
+        });
     }
 
     // SISTEMA LIMPIO: Incrementar contador en el documento principal del usuario

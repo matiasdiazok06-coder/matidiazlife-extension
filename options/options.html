@@ -107,6 +107,28 @@
             font-size: 13px;
         }
 
+        .credencial {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .credencial code {
+            background: #f3f4f6;
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .credencial .copiar {
+            background: #10b981;
+        }
+
+        .credencial .copiar:hover {
+            background: #059669;
+        }
+
         .acciones .eliminar {
             background: #ef4444;
         }
@@ -183,6 +205,10 @@
             .estado.info {
                 background: rgba(59, 130, 246, 0.2);
             }
+
+            .credencial code {
+                background: rgba(30, 41, 59, 0.6);
+            }
         }
     </style>
 </head>
@@ -200,8 +226,10 @@
             <form id="formUsuarioActual">
                 <label for="emailActual">Tu email (para validar permisos de owner)</label>
                 <input type="email" id="emailActual" name="emailActual" placeholder="tu-email@ejemplo.com" autocomplete="email" required>
+                <label for="credencialActual">Tu credencial personal (si no sos el owner)</label>
+                <input type="text" id="credencialActual" name="credencialActual" placeholder="MATI-XXXXXX-AAAA" autocomplete="off">
                 <button type="submit">Guardar mi email</button>
-                <p class="nota">Este email sólo se utiliza localmente para validar acciones restringidas al owner.</p>
+                <p class="nota">El owner no necesita credencial. Los demás miembros deben ingresar la credencial asignada para usar la extensión.</p>
             </form>
         </section>
 
@@ -230,13 +258,14 @@
                 <thead>
                     <tr>
                         <th>Email</th>
+                        <th>Credencial</th>
                         <th>Rol</th>
                         <th>Acciones</th>
                     </tr>
                 </thead>
                 <tbody id="listaMiembros">
                     <tr>
-                        <td colspan="3">Sin miembros registrados todavía.</td>
+                        <td colspan="4">Sin miembros registrados todavía.</td>
                     </tr>
                 </tbody>
             </table>
@@ -247,6 +276,7 @@
             <ul>
                 <li>Los datos quedan almacenados en la clave <code>matidiaz_members</code> dentro de <code>chrome.storage.local</code>.</li>
                 <li>No se envían emails ni datos a servidores externos desde esta pantalla.</li>
+                <li>Cada miembro obtiene una credencial automática con formato <code>MATI-XXXXXX-AAAA</code>; compartila de forma segura.</li>
                 <li>Si tu copia de md outbound se conecta a un servidor remoto, revisá los comentarios en el código para adaptar cualquier sincronización necesaria.</li>
             </ul>
         </section>

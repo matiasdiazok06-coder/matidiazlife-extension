@@ -7,6 +7,7 @@
 
 const STORAGE_KEY = 'matidiaz_members';
 const CURRENT_USER_KEY = 'matidiaz_current_user';
+const CURRENT_CREDENTIAL_KEY = 'matidiaz_current_credential';
 
 let estado = {
     owner: '',
@@ -14,6 +15,7 @@ let estado = {
 };
 
 let usuarioActual = '';
+let credencialActual = '';
 
 // Utilidades de almacenamiento ------------------------------------------------
 function obtenerDesdeStorage(clave) {
@@ -69,24 +71,45 @@ async function inicializarEstructura() {
 
 function normalizarEstructura(datos) {
     const normalizado = {
-        owner: typeof datos.owner === 'string' ? datos.owner : '',
+        owner: typeof datos.owner === 'string' ? datos.owner.trim().toLowerCase() : '',
         members: Array.isArray(datos.members) ? datos.members : []
     };
 
-    normalizado.members = normalizado.members
-        .filter(item => item && typeof item.email === 'string' && item.email.trim().length > 0)
-        .map(item => ({
-            email: item.email.trim().toLowerCase(),
-            role: ['owner', 'admin', 'member'].includes(item.role) ? item.role : 'member'
-        }));
+    const credencialesUsadas = new Set();
 
-    if (normalizado.owner && !normalizado.members.some(miembro => miembro.email === normalizado.owner)) {
-        normalizado.members.push({ email: normalizado.owner, role: 'owner' });
+    const miembrosFiltrados = normalizado.members
+        .filter(item => item && typeof item.email === 'string' && item.email.trim().length > 0)
+        .map(item => {
+            const email = item.email.trim().toLowerCase();
+            const rol = ['owner', 'admin', 'member'].includes(item.role) ? item.role : 'member';
+            const credencial = typeof item.credential === 'string' ? item.credential.trim().toUpperCase() : '';
+            return {
+                email,
+                role: rol,
+                credential: credencial
+            };
+        });
+
+    let miembrosNormalizados = miembrosFiltrados.map(miembro => {
+        let credential = miembro.credential;
+        if (!credential || credencialesUsadas.has(credential)) {
+            credential = generarCredencialUnica(credencialesUsadas);
+        }
+        credencialesUsadas.add(credential);
+        return { ...miembro, credential };
+    });
+
+    if (normalizado.owner && !miembrosNormalizados.some(miembro => miembro.email === normalizado.owner)) {
+        miembrosNormalizados.push({
+            email: normalizado.owner,
+            role: 'owner',
+            credential: generarCredencialUnica(credencialesUsadas)
+        });
     }
 
     // Asegurarnos de que sólo haya un owner en la lista
     let ownerEncontrado = false;
-    normalizado.members = normalizado.members.map(miembro => {
+    miembrosNormalizados = miembrosNormalizados.map(miembro => {
         if (miembro.email === normalizado.owner) {
             ownerEncontrado = true;
             return { ...miembro, role: 'owner' };
@@ -98,10 +121,43 @@ function normalizarEstructura(datos) {
     });
 
     if (!ownerEncontrado && normalizado.owner) {
-        normalizado.members.push({ email: normalizado.owner, role: 'owner' });
+        const credential = generarCredencialUnica(credencialesUsadas);
+        miembrosNormalizados.push({
+            email: normalizado.owner,
+            role: 'owner',
+            credential
+        });
+        credencialesUsadas.add(credential);
     }
 
-    return normalizado;
+    return {
+        owner: normalizado.owner,
+        members: miembrosNormalizados
+    };
+}
+
+function generarCredencialUnica(conjuntoExistente = new Set()) {
+    let credencial = '';
+    const maxIntentos = 50;
+    let intentos = 0;
+    do {
+        const parteAleatoria = generarSegmentoAleatorio();
+        const anio = new Date().getFullYear();
+        credencial = `MATI-${parteAleatoria}-${anio}`;
+        intentos += 1;
+    } while (conjuntoExistente.has(credencial) && intentos < maxIntentos);
+    conjuntoExistente.add(credencial);
+    return credencial;
+}
+
+function generarSegmentoAleatorio() {
+    const caracteres = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let resultado = '';
+    for (let i = 0; i < 6; i += 1) {
+        const indice = Math.floor(Math.random() * caracteres.length);
+        resultado += caracteres.charAt(indice);
+    }
+    return resultado;
 }
 
 async function cargarUsuarioActual() {
@@ -112,6 +168,20 @@ async function cargarUsuarioActual() {
             const input = document.getElementById('emailActual');
             if (input) {
                 input.value = usuarioActual;
+            }
+        }
+        const credencial = await obtenerDesdeStorage(CURRENT_CREDENTIAL_KEY);
+        if (typeof credencial === 'string') {
+            credencialActual = credencial.trim().toUpperCase();
+            const inputCredencial = document.getElementById('credencialActual');
+            if (inputCredencial) {
+                inputCredencial.value = credencialActual;
+            }
+        } else {
+            credencialActual = '';
+            const inputCredencial = document.getElementById('credencialActual');
+            if (inputCredencial) {
+                inputCredencial.value = '';
             }
         }
     } catch (error) {
@@ -153,6 +223,28 @@ function mostrarEstado(mensaje, tipo = 'info', duracion = 3000) {
     }
 }
 
+async function copiarAlPortapapeles(texto) {
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(texto);
+            mostrarEstado('Credencial copiada al portapapeles.', 'ok');
+        } else {
+            const campoTemporal = document.createElement('textarea');
+            campoTemporal.value = texto;
+            campoTemporal.setAttribute('readonly', '');
+            campoTemporal.style.position = 'absolute';
+            campoTemporal.style.left = '-9999px';
+            document.body.appendChild(campoTemporal);
+            campoTemporal.select();
+            document.execCommand('copy');
+            document.body.removeChild(campoTemporal);
+            mostrarEstado('Credencial copiada. Si no funcionó, copiala manualmente.', 'info');
+        }
+    } catch (error) {
+        mostrarEstado(`No se pudo copiar la credencial: ${error.message}`, 'error', 5000);
+    }
+}
+
 function renderizarMiembros() {
     const cuerpo = document.getElementById('listaMiembros');
     const ownerLabel = document.getElementById('ownerActual');
@@ -163,7 +255,7 @@ function renderizarMiembros() {
     if (!estado.members.length) {
         const fila = document.createElement('tr');
         const columna = document.createElement('td');
-        columna.colSpan = 3;
+        columna.colSpan = 4;
         columna.textContent = 'Sin miembros registrados todavía.';
         fila.appendChild(columna);
         cuerpo.appendChild(fila);
@@ -180,6 +272,24 @@ function renderizarMiembros() {
             const emailTd = document.createElement('td');
             emailTd.textContent = miembro.email;
             fila.appendChild(emailTd);
+
+            const credencialTd = document.createElement('td');
+            credencialTd.className = 'credencial';
+            if (miembro.credential) {
+                const credencialCode = document.createElement('code');
+                credencialCode.textContent = miembro.credential;
+                credencialTd.appendChild(credencialCode);
+
+                const botonCopiar = document.createElement('button');
+                botonCopiar.textContent = 'Copiar';
+                botonCopiar.type = 'button';
+                botonCopiar.className = 'copiar';
+                botonCopiar.addEventListener('click', () => copiarAlPortapapeles(miembro.credential));
+                credencialTd.appendChild(botonCopiar);
+            } else {
+                credencialTd.textContent = '—';
+            }
+            fila.appendChild(credencialTd);
 
             const rolTd = document.createElement('td');
             rolTd.textContent = formatearRol(miembro.role);
@@ -318,7 +428,10 @@ async function agregarMiembro(email, rol) {
         return;
     }
 
-    estado.members.push({ email: emailLimpio, role: rol });
+    const credencialesUsadas = new Set(estado.members.map(miembro => miembro.credential).filter(Boolean));
+    const nuevaCredencial = generarCredencialUnica(credencialesUsadas);
+
+    estado.members.push({ email: emailLimpio, role: rol, credential: nuevaCredencial });
     await guardarEnStorage({
         [STORAGE_KEY]: {
             owner: estado.owner,
@@ -355,25 +468,57 @@ async function asignarOwner(email) {
     });
 
     const existe = miembrosSinOwner.some(miembro => miembro.email === emailLimpio);
-    const listaActualizada = existe ? miembrosSinOwner : [...miembrosSinOwner, { email: emailLimpio, role: 'owner' }];
+    const credencialesUsadas = new Set(miembrosSinOwner.map(miembro => miembro.credential).filter(Boolean));
+    const listaActualizada = existe ? miembrosSinOwner : [...miembrosSinOwner, {
+        email: emailLimpio,
+        role: 'owner',
+        credential: generarCredencialUnica(credencialesUsadas)
+    }];
 
-    estado = {
+    estado = normalizarEstructura({
         owner: emailLimpio,
         members: listaActualizada
-    };
+    });
 
     await guardarEnStorage({ [STORAGE_KEY]: estado });
 }
 
-async function guardarUsuarioActual(email) {
+async function guardarUsuarioActual(email, credential) {
     if (!email) {
         throw new Error('El email actual no puede quedar vacío.');
     }
     if (!validarEmail(email)) {
         throw new Error('Ingresá un email válido.');
     }
-    usuarioActual = email.trim().toLowerCase();
-    await guardarEnStorage({ [CURRENT_USER_KEY]: usuarioActual });
+    const emailLimpio = email.trim().toLowerCase();
+    const esOwner = estado.owner && emailLimpio === estado.owner.trim().toLowerCase();
+
+    if (!esOwner) {
+        if (!credential || !credential.trim()) {
+            throw new Error('Debés ingresar tu credencial asignada.');
+        }
+        const miembro = estado.members.find(item => item.email === emailLimpio);
+        if (!miembro) {
+            throw new Error('Tu email no está registrado en el equipo.');
+        }
+        const credencialRegistrada = (miembro.credential || '').trim().toUpperCase();
+        const credencialIngresada = credential.trim().toUpperCase();
+        if (!credencialRegistrada) {
+            throw new Error('El owner aún no generó tu credencial.');
+        }
+        if (credencialRegistrada !== credencialIngresada) {
+            throw new Error('La credencial ingresada no coincide con la registrada.');
+        }
+        credencialActual = credencialIngresada;
+    } else {
+        credencialActual = (credential || '').trim().toUpperCase();
+    }
+
+    usuarioActual = emailLimpio;
+    await guardarEnStorage({
+        [CURRENT_USER_KEY]: usuarioActual,
+        [CURRENT_CREDENTIAL_KEY]: credencialActual
+    });
     actualizarBloqueoPorPermisos();
 }
 
@@ -415,9 +560,10 @@ function registrarEventos() {
         formularioUsuario.addEventListener('submit', async (evento) => {
             evento.preventDefault();
             const email = document.getElementById('emailActual').value;
+            const credential = document.getElementById('credencialActual')?.value || '';
             try {
-                await guardarUsuarioActual(email);
-                mostrarEstado('Tu email se guardó correctamente.', 'ok');
+                await guardarUsuarioActual(email, credential);
+                mostrarEstado('Tus datos de acceso se guardaron correctamente.', 'ok');
             } catch (error) {
                 mostrarEstado(error.message, 'error', 6000);
             }

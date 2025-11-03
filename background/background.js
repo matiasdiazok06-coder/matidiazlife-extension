@@ -72,6 +72,10 @@ class MdOutboundBackgroundScript {
                     sendResponse({ success: true });
                     break;
 
+                case 'matidiaz_validateCredential':
+                    sendResponse({ success: true, data: await this.validateCredential(request.payload) });
+                    break;
+
                 default:
                     sendResponse({ success: false, error: 'Acción no reconocida' });
             }
@@ -148,11 +152,9 @@ class MdOutboundBackgroundScript {
     async initializeTeamStorage() {
         try {
             const datos = await this.readTeamStorage();
-            if (!datos) {
-                const estructura = { owner: '', members: [] };
-                await this.writeTeamStorage(estructura);
-                console.log('⚙️  md outbound: almacenamiento de equipo inicializado.');
-            }
+            const estructura = this.normalizeTeamData(datos || {});
+            await this.writeTeamStorage(estructura);
+            console.log('⚙️  md outbound: almacenamiento de equipo inicializado.');
         } catch (error) {
             console.error('❌ Error inicializando el equipo de md outbound:', error);
         }
@@ -185,10 +187,13 @@ class MdOutboundBackgroundScript {
             return;
         }
 
-        const actualizados = {
+        const credencialesUsadas = new Set(datos.members.map(miembro => miembro.credential).filter(Boolean));
+        const credential = this.generateUniqueCredential(credencialesUsadas);
+
+        const actualizados = this.normalizeTeamData({
             owner: datos.owner,
-            members: [...datos.members, { email: limpio, role: role || 'member' }]
-        };
+            members: [...datos.members, { email: limpio, role: role || 'member', credential }]
+        });
 
         await this.writeTeamStorage(actualizados);
     }
@@ -205,7 +210,7 @@ class MdOutboundBackgroundScript {
         }
 
         const filtrados = datos.members.filter(miembro => miembro.email !== limpio);
-        await this.writeTeamStorage({ owner: datos.owner, members: filtrados });
+        await this.writeTeamStorage(this.normalizeTeamData({ owner: datos.owner, members: filtrados }));
     }
 
     async setOwner(email) {
@@ -229,30 +234,50 @@ class MdOutboundBackgroundScript {
 
         const existe = miembrosActualizados.some(miembro => miembro.email === limpio);
         if (!existe) {
-            miembrosActualizados.push({ email: limpio, role: 'owner' });
+            const credencialesUsadas = new Set(miembrosActualizados.map(miembro => miembro.credential).filter(Boolean));
+            miembrosActualizados.push({
+                email: limpio,
+                role: 'owner',
+                credential: this.generateUniqueCredential(credencialesUsadas)
+            });
         }
 
-        await this.writeTeamStorage({
+        const estructura = this.normalizeTeamData({
             owner: limpio,
             members: miembrosActualizados
         });
+
+        await this.writeTeamStorage(estructura);
     }
 
     normalizeTeamData(data) {
         const owner = typeof data.owner === 'string' ? data.owner.trim().toLowerCase() : '';
         const members = Array.isArray(data.members) ? data.members : [];
 
+        const credencialesUsadas = new Set();
+
         const lista = members
             .filter(item => item && typeof item.email === 'string')
-            .map(item => ({
-                email: item.email.trim().toLowerCase(),
-                role: ['owner', 'admin', 'member'].includes(item.role) ? item.role : 'member'
-            }));
+            .map(item => {
+                const email = item.email.trim().toLowerCase();
+                const role = ['owner', 'admin', 'member'].includes(item.role) ? item.role : 'member';
+                let credential = typeof item.credential === 'string' ? item.credential.trim().toUpperCase() : '';
+                if (!credential || credencialesUsadas.has(credential)) {
+                    credential = this.generateUniqueCredential(credencialesUsadas);
+                } else {
+                    credencialesUsadas.add(credential);
+                }
+                return { email, role, credential };
+            });
 
         const resultado = { owner, members: lista };
 
         if (owner && !lista.some(miembro => miembro.email === owner)) {
-            resultado.members.push({ email: owner, role: 'owner' });
+            resultado.members.push({
+                email: owner,
+                role: 'owner',
+                credential: this.generateUniqueCredential(credencialesUsadas)
+            });
         } else {
             resultado.members = resultado.members.map(miembro => {
                 if (miembro.email === owner) {
@@ -266,6 +291,59 @@ class MdOutboundBackgroundScript {
         }
 
         return resultado;
+    }
+
+    generateUniqueCredential(conjunto) {
+        const existentes = conjunto instanceof Set ? conjunto : new Set();
+        let credencial = '';
+        const caracteres = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let intentos = 0;
+        do {
+            let aleatorio = '';
+            for (let i = 0; i < 6; i += 1) {
+                const indice = Math.floor(Math.random() * caracteres.length);
+                aleatorio += caracteres.charAt(indice);
+            }
+            const anio = new Date().getFullYear();
+            credencial = `MATI-${aleatorio}-${anio}`;
+            intentos += 1;
+        } while (existentes.has(credencial) && intentos < 50);
+        existentes.add(credencial);
+        return credencial;
+    }
+
+    async validateCredential(payload = {}) {
+        const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+        const credential = typeof payload.credential === 'string' ? payload.credential.trim().toUpperCase() : '';
+        const datos = await this.getMembers();
+
+        if (!email) {
+            return { valid: false, reason: 'Debés registrar tu email en la página de opciones.' };
+        }
+
+        if (datos.owner && datos.owner.toLowerCase() === email) {
+            return { valid: true, ownerBypass: true };
+        }
+
+        const miembro = datos.members.find(item => item.email === email);
+
+        if (!miembro) {
+            return { valid: false, reason: 'Tu email no figura en el equipo configurado.' };
+        }
+
+        if (!miembro.credential) {
+            return { valid: false, reason: 'El owner aún no generó tu credencial.' };
+        }
+
+        if (!credential) {
+            return { valid: false, reason: 'Ingresá tu credencial local en la página de opciones.' };
+        }
+
+        if (miembro.credential !== credential) {
+            return { valid: false, reason: 'La credencial proporcionada no coincide con la registrada.' };
+        }
+
+        return { valid: true, ownerBypass: false };
     }
 
     readTeamStorage() {
