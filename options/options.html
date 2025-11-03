@@ -54,6 +54,12 @@
             transition: border-color 0.2s ease;
         }
 
+        input[readonly], input:disabled, .solo-lectura {
+            background: #f3f4f6;
+            color: #6b7280;
+            cursor: not-allowed;
+        }
+
         input[type="email"]:focus, select:focus {
             border-color: #3a86ff;
             outline: none;
@@ -190,6 +196,11 @@
                 color: #f8fafc;
             }
 
+            input[readonly], input:disabled, .solo-lectura {
+                background: #1f2937;
+                color: #94a3b8;
+            }
+
             th, td {
                 border-color: #1f2937;
             }
@@ -230,6 +241,7 @@
                 <input type="text" id="credencialActual" name="credencialActual" placeholder="MATI-XXXXXX-AAAA" autocomplete="off">
                 <button type="submit">Guardar mi email</button>
                 <p class="nota">El owner no necesita credencial. Los demás miembros deben ingresar la credencial asignada para usar la extensión.</p>
+                <p class="nota" id="notaOwnerAutomatico" hidden>md outbound detectó automáticamente al owner. No necesitás completar este formulario.</p>
             </form>
         </section>
 

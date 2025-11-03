@@ -8,6 +8,7 @@
 const STORAGE_KEY = 'matidiaz_members';
 const CURRENT_USER_KEY = 'matidiaz_current_user';
 const CURRENT_CREDENTIAL_KEY = 'matidiaz_current_credential';
+const DEFAULT_OWNER_EMAIL = 'matiasdiazok06@gmail.com';
 
 let estado = {
     owner: '',
@@ -55,10 +56,23 @@ function guardarEnStorage(objeto) {
 async function inicializarEstructura() {
     try {
         const datos = await obtenerDesdeStorage(STORAGE_KEY);
-        if (!datos) {
-            const estructuraBase = { owner: '', members: [] };
-            await guardarEnStorage({ [STORAGE_KEY]: estructuraBase });
+        const ownerExistente = datos && typeof datos.owner === 'string' && datos.owner.trim().length > 0;
+
+        if (!ownerExistente) {
+            const estructuraBase = normalizarEstructura({
+                owner: DEFAULT_OWNER_EMAIL,
+                members: []
+            });
+
             estado = estructuraBase;
+            usuarioActual = DEFAULT_OWNER_EMAIL.toLowerCase();
+            credencialActual = '';
+
+            await guardarEnStorage({
+                [STORAGE_KEY]: estructuraBase,
+                [CURRENT_USER_KEY]: usuarioActual,
+                [CURRENT_CREDENTIAL_KEY]: credencialActual
+            });
         } else {
             estado = normalizarEstructura(datos);
             await guardarEnStorage({ [STORAGE_KEY]: estado });
@@ -163,27 +177,21 @@ function generarSegmentoAleatorio() {
 async function cargarUsuarioActual() {
     try {
         const email = await obtenerDesdeStorage(CURRENT_USER_KEY);
-        if (typeof email === 'string') {
+        if (typeof email === 'string' && email.trim()) {
             usuarioActual = email.trim().toLowerCase();
-            const input = document.getElementById('emailActual');
-            if (input) {
-                input.value = usuarioActual;
-            }
+        } else if (estado.owner) {
+            usuarioActual = estado.owner.toLowerCase();
+            await guardarEnStorage({ [CURRENT_USER_KEY]: usuarioActual });
         }
+
         const credencial = await obtenerDesdeStorage(CURRENT_CREDENTIAL_KEY);
-        if (typeof credencial === 'string') {
+        if (typeof credencial === 'string' && credencial.trim()) {
             credencialActual = credencial.trim().toUpperCase();
-            const inputCredencial = document.getElementById('credencialActual');
-            if (inputCredencial) {
-                inputCredencial.value = credencialActual;
-            }
         } else {
             credencialActual = '';
-            const inputCredencial = document.getElementById('credencialActual');
-            if (inputCredencial) {
-                inputCredencial.value = '';
-            }
         }
+
+        actualizarCamposUsuarioActual();
     } catch (error) {
         mostrarEstado(`No se pudo cargar tu email: ${error.message}`, 'error');
     }
@@ -191,6 +199,50 @@ async function cargarUsuarioActual() {
 
 function esOwnerActual() {
     return usuarioActual && estado.owner && usuarioActual === estado.owner.toLowerCase();
+}
+
+function actualizarCamposUsuarioActual() {
+    const emailInput = document.getElementById('emailActual');
+    const credencialInput = document.getElementById('credencialActual');
+    const notaOwner = document.getElementById('notaOwnerAutomatico');
+    const botonGuardar = document.querySelector('#formUsuarioActual button[type="submit"]');
+
+    const ownerEmail = estado.owner || DEFAULT_OWNER_EMAIL;
+    const esOwner = ownerEmail && usuarioActual && usuarioActual === ownerEmail.toLowerCase();
+
+    if (emailInput) {
+        emailInput.value = esOwner ? ownerEmail : (usuarioActual || '');
+        if (esOwner) {
+            emailInput.setAttribute('readonly', 'readonly');
+            emailInput.classList.add('solo-lectura');
+        } else {
+            emailInput.removeAttribute('readonly');
+            emailInput.classList.remove('solo-lectura');
+        }
+    }
+
+    if (credencialInput) {
+        if (esOwner) {
+            credencialInput.value = '';
+            credencialInput.setAttribute('disabled', 'disabled');
+        } else {
+            credencialInput.removeAttribute('disabled');
+            credencialInput.value = credencialActual || '';
+        }
+    }
+
+    if (notaOwner) {
+        if (esOwner) {
+            notaOwner.hidden = false;
+            notaOwner.textContent = `md outbound detectó automáticamente al owner ${ownerEmail}. No necesitás completar este formulario.`;
+        } else {
+            notaOwner.hidden = true;
+        }
+    }
+
+    if (botonGuardar) {
+        botonGuardar.disabled = esOwner;
+    }
 }
 
 function actualizarBloqueoPorPermisos() {
@@ -322,10 +374,11 @@ function renderizarMiembros() {
     }
 
     if (ownerLabel) {
-        ownerLabel.textContent = estado.owner || '(sin definir)';
+        ownerLabel.textContent = estado.owner || DEFAULT_OWNER_EMAIL;
     }
 
     actualizarBloqueoPorPermisos();
+    actualizarCamposUsuarioActual();
 }
 
 function formatearRol(rol) {
@@ -390,6 +443,7 @@ async function sincronizarEstado() {
             estado = normalizarEstructura(datos);
         }
         renderizarMiembros();
+        actualizarCamposUsuarioActual();
     } catch (error) {
         mostrarEstado(`No se pudo sincronizar: ${error.message}`, 'error', 6000);
     }
@@ -520,6 +574,7 @@ async function guardarUsuarioActual(email, credential) {
         [CURRENT_CREDENTIAL_KEY]: credencialActual
     });
     actualizarBloqueoPorPermisos();
+    actualizarCamposUsuarioActual();
 }
 
 // Eventos --------------------------------------------------------------------
@@ -582,4 +637,5 @@ chrome.storage.onChanged.addListener((cambios, area) => {
     }
     estado = normalizarEstructura(nuevoValor);
     renderizarMiembros();
+    actualizarCamposUsuarioActual();
 });
