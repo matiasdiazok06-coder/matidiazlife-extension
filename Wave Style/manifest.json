@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Wave Dashboard",
+  "version": "1.0",
+  "description": "Wave style interface",
+  "permissions": ["tabs"],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,57 @@
+🚀 PRIME OUTBOUND BOT - INSTRUCCIONES DE INSTALACIÓN
+================================================================
+
+📦 INSTALACIÓN DE LA EXTENSIÓN:
+
+1. ABRIR CHROME:
+   - Abrir Google Chrome
+   - Ir a: chrome://extensions/
+
+2. ACTIVAR MODO DESARROLLADOR:
+   - En la esquina superior derecha, activar "Modo de desarrollador"
+
+3. CARGAR EXTENSIÓN:
+   - Hacer clic en "Cargar extensión sin empaquetar"
+   - Seleccionar esta carpeta completa (dist)
+   - ¡Listo! Aparecerá el ícono en la barra de herramientas
+
+🔑 USO DE LA EXTENSIÓN:
+
+1. INICIAR SESIÓN:
+   - Hacer clic en el ícono de la extensión
+   - Ingresar el email y contraseña proporcionados
+   - Hacer clic en "Iniciar Sesión"
+
+2. CREAR CAMPAÑAS:
+   - Hacer clic en "Nueva Campaña"
+   - Agregar nombre, mensajes y usuarios objetivo
+   - Guardar la campaña
+
+3. EJECUTAR CAMPAÑAS:
+   - Ir a Instagram en otra pestaña
+   - Volver a la extensión
+   - Hacer clic en "Ejecutar" en la campaña deseada
+
+📊 LÍMITES DIARIOS:
+- Máximo 80 mensajes por día
+- Se resetea automáticamente a las 00:00 (hora Argentina)
+- El contador se actualiza en tiempo real
+
+👥 TRABAJO EN EQUIPO:
+- Múltiples personas pueden usar la misma cuenta
+- Cada persona debe ingresar su nombre la primera vez
+- El administrador puede ver estadísticas de todo el equipo
+
+⚠️ IMPORTANTE:
+- Mantener Instagram abierto mientras se ejecutan campañas
+- No cerrar la extensión durante el envío de mensajes
+- Respetar los límites diarios para evitar restricciones
+
+🆘 SOPORTE:
+- Si hay problemas, contactar al administrador
+- No modificar archivos de la extensión
+- Usar solo en cuentas de Instagram autorizadas
+
+================================================================
+Prime Outbound Bot - Versión 26.0
+================================================================
