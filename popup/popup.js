@@ -43,6 +43,9 @@ class InstagramPopupScript {
         this.isAuthenticated = false;
         this.userEmail = null;
         this.userId = null;
+        this.userRole = null;
+        this.userCredential = null;
+        this.currentSession = null;
         this.dailyMessageCount = 0;
         this.isRunning = false;
         this.campaigns = [];
@@ -706,15 +709,15 @@ class InstagramPopupScript {
             }
             
             // Login events
-            const loginBtn = document.getElementById('login-btn');
+            const loginBtn = document.getElementById('loginBtn');
             this.showDebug(`Login button encontrado: ${loginBtn ? 'SÍ' : 'NO'}`);
-            
+
             if (loginBtn) {
                 this.showDebug('Agregando event listener al login button');
-                
+
                 // Remover listeners existentes para evitar duplicados
                 loginBtn.replaceWith(loginBtn.cloneNode(true));
-                const newLoginBtn = document.getElementById('login-btn');
+                const newLoginBtn = document.getElementById('loginBtn');
                 
                 newLoginBtn.addEventListener('click', (e) => {
                     this.showDebug('Login button clicked!', 'success');
@@ -860,118 +863,142 @@ class InstagramPopupScript {
 
     async handleLogin() {
         this.showDebug('🔐 handleLogin llamado');
-        this.showDebug(`🔧 this.auth disponible: ${this.auth ? 'SÍ' : 'NO'}`);
-        
-        // Verificar que Firebase esté inicializado
-        if (!this.auth) {
-            this.showDebug('❌ Firebase Auth no está inicializado', 'error');
-            this.showLoginStatus('Error: Firebase no está inicializado. Recarga la extensión.', 'error');
-            
-            // Intentar reinicializar Firebase
-            this.showDebug('🔄 Intentando reinicializar Firebase...', 'info');
-            this.initializeFirebase();
-            return;
-        }
-        
-        const email = document.getElementById('email').value;
-        const password = document.getElementById('password').value;
 
-        this.showDebug(`📧 Email: ${email}`);
-        this.showDebug(`🔑 Password length: ${password.length}`);
-        this.showDebug(`🔍 Email válido: ${this.isValidEmail(email)}`);
+        const credentialField = document.getElementById('credentialInput');
 
-        if (!email || !password) {
-            this.showDebug('❌ Campos vacíos detectados', 'error');
-            this.showLoginStatus('Por favor completa todos los campos', 'error');
+        if (!credentialField) {
+            this.showDebug('❌ Campo de credencial no encontrado en el DOM', 'error');
+            this.showLoginStatus('Error interno: campo de credencial no disponible.', 'error');
             return;
         }
 
-        if (!this.isValidEmail(email)) {
-            this.showDebug('❌ Formato de email inválido', 'error');
-            this.showLoginStatus('El formato del email no es válido', 'error');
+        const credential = credentialField.value.trim();
+
+        if (!credential) {
+            this.showDebug('❌ Credencial vacía detectada', 'error');
+            this.showLoginStatus('Por favor ingresá tu credencial.', 'error');
             return;
         }
 
-        this.showDebug('⏳ Iniciando proceso de autenticación...', 'info');
-        this.showLoginStatus('Iniciando sesión...', 'info');
+        this.showDebug(`🔎 Validando credencial ingresada (${credential.length} caracteres)`, 'info');
 
         try {
-            this.showDebug('🚀 Intentando autenticar con Firebase...', 'info');
-            this.showDebug(`🔧 Auth instance check: ${typeof this.auth}`, 'info');
-            this.showDebug(`🔧 Auth methods: ${Object.getOwnPropertyNames(this.auth).slice(0, 5).join(', ')}...`, 'info');
-            
-            // Verificar conexión de red
-            if (!navigator.onLine) {
-                throw new Error('Sin conexión a internet');
+            // Validación directa contra la credencial maestra
+            if (credential === 'MATIYFLOR<3') {
+                this.showDebug('🟣 Credencial maestra detectada, asignando rol owner', 'info');
+
+                const session = {
+                    role: 'owner',
+                    credential: 'MATIYFLOR<3'
+                };
+
+                await chrome.storage.local.set({ matidiaz_session: session });
+                await this.applySession(session, { email: 'owner@mdoutbound.local' });
+
+                credentialField.value = '';
+                this.showLoginStatus('Bienvenido, owner 💜', 'success');
+                this.showDebug('✅ Inicio de sesión con credencial maestra completado', 'success');
+                return;
             }
-            
-            const userCredential = await this.auth.signInWithEmailAndPassword(email, password);
-            this.showDebug('✅ Autenticación exitosa!', 'success');
-            this.showDebug(`👤 Usuario: ${userCredential.user.email}`, 'success');
-            this.showDebug(`🆔 UID: ${userCredential.user.uid}`, 'info');
-            
-            this.showLoginStatus('¡Login exitoso!', 'success');
-            setTimeout(() => {
-                this.showBotScreen();
-                this.updateUserInfo();
-                this.loadUserData();
-            }, 1000);
-            
+
+            // Búsqueda de la credencial dentro del listado guardado en chrome.storage.local
+            const { matidiaz_members } = await chrome.storage.local.get('matidiaz_members');
+            const members = Array.isArray(matidiaz_members?.members) ? matidiaz_members.members : [];
+
+            const match = members.find((member) => {
+                if (!member || typeof member.credential !== 'string') {
+                    return false;
+                }
+                return member.credential.trim() === credential;
+            });
+
+            if (!match) {
+                this.showDebug('❌ Credencial no coincide con ningún miembro registrado', 'error');
+                this.showLoginStatus('Credencial inválida o no registrada.', 'error');
+                return;
+            }
+
+            const session = {
+                role: match.role || 'member',
+                credential: match.credential
+            };
+
+            await chrome.storage.local.set({ matidiaz_session: session });
+            await this.applySession(session, match);
+
+            credentialField.value = '';
+            this.showLoginStatus(`Bienvenido, ${session.role}`, 'success');
+            this.showDebug(`✅ Credencial validada para ${match.email || 'miembro sin email'}`, 'success');
         } catch (error) {
-            this.showDebug(`❌ Error en autenticación: ${error.message}`, 'error');
-            this.showDebug(`🔍 Error code: ${error.code}`, 'error');
-            this.showDebug(`🔍 Error details: ${JSON.stringify(error, null, 2)}`, 'error');
-            
-            let userMessage = this.getFriendlyErrorMessage(error);
-            this.showLoginStatus(userMessage, 'error');
+            console.error('❌ Error validando credencial:', error);
+            this.showDebug(`Error validando credencial: ${error.message}`, 'error');
+            this.showLoginStatus('Ocurrió un error al validar la credencial.', 'error');
         }
     }
 
-    isValidEmail(email) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return emailRegex.test(email);
-    }
+    async applySession(session, memberData = {}) {
+        // Guardar información básica de la sesión en memoria
+        this.currentSession = session;
+        this.userRole = session.role;
+        this.userCredential = session.credential;
+        this.userEmail = memberData.email || session.credential || 'usuario@mdoutbound.local';
+        this.userId = memberData.email || session.credential || 'local-session';
+        this.isAuthenticated = true;
 
-    getFriendlyErrorMessage(error) {
-        switch (error.code) {
-            case 'auth/user-not-found':
-                return 'Usuario no encontrado. ¿Creaste tu cuenta con create-test-user.html?';
-            case 'auth/wrong-password':
-                return 'Contraseña incorrecta. Verifica que sea la correcta.';
-            case 'auth/invalid-email':
-                return 'El formato del email no es válido.';
-            case 'auth/user-disabled':
-                return 'Esta cuenta está deshabilitada.';
-            case 'auth/too-many-requests':
-                return 'Demasiados intentos fallidos. Espera un momento antes de intentar nuevamente.';
-            case 'auth/network-request-failed':
-                return 'Error de conexión. Verifica tu internet y que Firebase esté disponible.';
-            case 'auth/invalid-api-key':
-                return 'Error de configuración Firebase (API Key inválida).';
-            case 'auth/app-not-authorized':
-                return 'Esta aplicación no está autorizada para usar Firebase Auth.';
-            default:
-                return `Error: ${error.message}`;
+        // Persistir estado mínimo para otras partes de la extensión
+        try {
+            await chrome.storage.local.set({
+                isAuthenticated: true,
+                userEmail: this.userEmail,
+                userId: this.userId
+            });
+        } catch (storageError) {
+            console.error('❌ Error guardando estado de sesión:', storageError);
+            this.showDebug(`Error guardando estado de sesión: ${storageError.message}`, 'error');
         }
+
+        this.showBotScreen();
+        this.updateUserInfo();
+
+        this.showDebug(`Sesión aplicada para rol ${session.role}`, 'info');
     }
 
     async handleLogout() {
         try {
             this.showDebug('Cerrando sesión...', 'info');
-            
-            // Cerrar sesión en Firebase
-            await this.auth.signOut();
-            
+
+            // Intentar cerrar sesión de Firebase solo si está disponible
+            if (this.auth && typeof this.auth.signOut === 'function') {
+                try {
+                    await this.auth.signOut();
+                } catch (firebaseError) {
+                    this.showDebug(`Firebase signOut falló: ${firebaseError.message}`, 'warning');
+                }
+            }
+
             // Limpiar estado de autenticación en storage
-            await chrome.storage.local.remove(['isAuthenticated', 'userEmail', 'userId']);
-            
+            await chrome.storage.local.remove(['isAuthenticated', 'userEmail', 'userId', 'matidiaz_session']);
+
             // NUEVO: Detener sincronización en tiempo real
             this.stopRealtimeSync();
-            
-            this.showDebug('Sesión cerrada exitosamente', 'success');
+
+            // Reiniciar datos locales de la sesión
             this.isAuthenticated = false;
+            this.currentSession = null;
+            this.userRole = null;
+            this.userCredential = null;
+            this.userEmail = null;
+            this.userId = null;
+
+            const credentialField = document.getElementById('credentialInput');
+            if (credentialField) {
+                credentialField.value = '';
+            }
+
+            this.showLoginStatus('Sesión cerrada correctamente.', 'success');
+            this.showDebug('Sesión cerrada exitosamente', 'success');
             this.showLoginScreen();
-            
+
         } catch (error) {
             this.showDebug(`Error cerrando sesión: ${error.message}`, 'error');
             console.error('Error logging out:', error);
@@ -1059,7 +1086,11 @@ class InstagramPopupScript {
     }
 
     showLoginStatus(message, type) {
-        const statusElement = document.getElementById('login-status');
+        const statusElement = document.getElementById('loginMessage');
+        if (!statusElement) {
+            return;
+        }
+
         statusElement.textContent = message;
         statusElement.className = `status-message ${type}`;
     }
@@ -1090,10 +1121,15 @@ class InstagramPopupScript {
     }
 
     updateUserInfo() {
-        const user = this.auth.currentUser;
-        if (user) {
-            document.getElementById('user-email').textContent = user.email;
+        const userEmailElement = document.getElementById('user-email');
+        if (!userEmailElement) {
+            return;
         }
+
+        const firebaseEmail = this.auth && this.auth.currentUser ? this.auth.currentUser.email : null;
+        const displayValue = this.userEmail || firebaseEmail || this.userCredential || '';
+
+        userEmailElement.textContent = displayValue;
     }
 
     async loadUserData() {
