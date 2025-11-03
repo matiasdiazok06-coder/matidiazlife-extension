@@ -83,6 +83,29 @@ async function inicializarEstructura() {
     }
 }
 
+function normalizarLimiteMensajes(valor, rol = 'member') {
+    if (rol === 'owner') {
+        return null;
+    }
+
+    if (typeof valor === 'number' && Number.isFinite(valor)) {
+        return valor < 0 ? null : Math.floor(valor);
+    }
+
+    if (typeof valor === 'string') {
+        const limpio = valor.trim();
+        if (!limpio) {
+            return null;
+        }
+        const parsed = Number(limpio);
+        if (Number.isFinite(parsed)) {
+            return parsed < 0 ? null : Math.floor(parsed);
+        }
+    }
+
+    return null;
+}
+
 function normalizarEstructura(datos) {
     const normalizado = {
         owner: typeof datos.owner === 'string' ? datos.owner.trim().toLowerCase() : '',
@@ -97,10 +120,12 @@ function normalizarEstructura(datos) {
             const email = item.email.trim().toLowerCase();
             const rol = ['owner', 'admin', 'member'].includes(item.role) ? item.role : 'member';
             const credencial = typeof item.credential === 'string' ? item.credential.trim().toUpperCase() : '';
+            const limite = normalizarLimiteMensajes(item.messageLimit, rol);
             return {
                 email,
                 role: rol,
-                credential: credencial
+                credential: credencial,
+                messageLimit: limite
             };
         });
 
@@ -117,7 +142,8 @@ function normalizarEstructura(datos) {
         miembrosNormalizados.push({
             email: normalizado.owner,
             role: 'owner',
-            credential: generarCredencialUnica(credencialesUsadas)
+            credential: generarCredencialUnica(credencialesUsadas),
+            messageLimit: null
         });
     }
 
@@ -126,12 +152,19 @@ function normalizarEstructura(datos) {
     miembrosNormalizados = miembrosNormalizados.map(miembro => {
         if (miembro.email === normalizado.owner) {
             ownerEncontrado = true;
-            return { ...miembro, role: 'owner' };
+            return { ...miembro, role: 'owner', messageLimit: null };
         }
         if (miembro.role === 'owner') {
-            return { ...miembro, role: 'admin' };
+            return {
+                ...miembro,
+                role: 'admin',
+                messageLimit: normalizarLimiteMensajes(miembro.messageLimit, 'admin')
+            };
         }
-        return miembro;
+        return {
+            ...miembro,
+            messageLimit: normalizarLimiteMensajes(miembro.messageLimit, miembro.role)
+        };
     });
 
     if (!ownerEncontrado && normalizado.owner) {
@@ -139,7 +172,8 @@ function normalizarEstructura(datos) {
         miembrosNormalizados.push({
             email: normalizado.owner,
             role: 'owner',
-            credential
+            credential,
+            messageLimit: null
         });
         credencialesUsadas.add(credential);
     }
@@ -307,7 +341,7 @@ function renderizarMiembros() {
     if (!estado.members.length) {
         const fila = document.createElement('tr');
         const columna = document.createElement('td');
-        columna.colSpan = 4;
+        columna.colSpan = 5;
         columna.textContent = 'Sin miembros registrados todavía.';
         fila.appendChild(columna);
         cuerpo.appendChild(fila);
@@ -346,6 +380,10 @@ function renderizarMiembros() {
             const rolTd = document.createElement('td');
             rolTd.textContent = formatearRol(miembro.role);
             fila.appendChild(rolTd);
+
+            const limiteTd = document.createElement('td');
+            limiteTd.textContent = formatearLimiteMensajes(miembro.messageLimit, miembro.role);
+            fila.appendChild(limiteTd);
 
             const accionesTd = document.createElement('td');
             accionesTd.className = 'acciones';
@@ -390,6 +428,19 @@ function formatearRol(rol) {
         default:
             return 'Miembro';
     }
+}
+
+function formatearLimiteMensajes(limite, rol) {
+    if (rol === 'owner' || limite === null || typeof limite === 'undefined') {
+        return 'Sin límite';
+    }
+
+    const numero = Number(limite);
+    if (!Number.isFinite(numero)) {
+        return 'Sin límite';
+    }
+
+    return `${Math.max(0, Math.floor(numero))}`;
 }
 
 async function confirmarYEliminar(email) {
@@ -454,7 +505,7 @@ function validarEmail(email) {
     return regex.test(email);
 }
 
-async function agregarMiembro(email, rol) {
+async function agregarMiembro(email, rol, limiteMensajes) {
     if (!esOwnerActual()) {
         throw new Error('Sólo el owner puede agregar miembros.');
     }
@@ -482,10 +533,20 @@ async function agregarMiembro(email, rol) {
         return;
     }
 
+    const limiteNormalizado = normalizarLimiteMensajes(limiteMensajes, rol);
+    if (limiteNormalizado === null || limiteNormalizado <= 0) {
+        throw new Error('Ingresá un límite de mensajes válido (mayor a 0).');
+    }
+
     const credencialesUsadas = new Set(estado.members.map(miembro => miembro.credential).filter(Boolean));
     const nuevaCredencial = generarCredencialUnica(credencialesUsadas);
 
-    estado.members.push({ email: emailLimpio, role: rol, credential: nuevaCredencial });
+    estado.members.push({
+        email: emailLimpio,
+        role: rol,
+        credential: nuevaCredencial,
+        messageLimit: limiteNormalizado
+    });
     await guardarEnStorage({
         [STORAGE_KEY]: {
             owner: estado.owner,
@@ -513,12 +574,19 @@ async function asignarOwner(email) {
 
     const miembrosSinOwner = estado.members.map(miembro => {
         if (miembro.email === emailLimpio) {
-            return { ...miembro, role: 'owner' };
+            return { ...miembro, role: 'owner', messageLimit: null };
         }
         if (miembro.role === 'owner') {
-            return { ...miembro, role: 'admin' };
+            return {
+                ...miembro,
+                role: 'admin',
+                messageLimit: normalizarLimiteMensajes(miembro.messageLimit, 'admin')
+            };
         }
-        return miembro;
+        return {
+            ...miembro,
+            messageLimit: normalizarLimiteMensajes(miembro.messageLimit, miembro.role)
+        };
     });
 
     const existe = miembrosSinOwner.some(miembro => miembro.email === emailLimpio);
@@ -593,16 +661,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 function registrarEventos() {
     const formulario = document.getElementById('formAgregar');
     const formularioUsuario = document.getElementById('formUsuarioActual');
+    const campoLimite = document.getElementById('messageLimit');
+    const selectorRol = document.getElementById('rolMiembro');
+
+    if (selectorRol && campoLimite) {
+        const actualizarCampoLimite = () => {
+            const esOwner = selectorRol.value === 'owner';
+            campoLimite.disabled = esOwner;
+            campoLimite.required = !esOwner;
+            if (esOwner) {
+                campoLimite.value = '';
+            }
+        };
+
+        selectorRol.addEventListener('change', actualizarCampoLimite);
+        actualizarCampoLimite();
+    }
 
     if (formulario) {
         formulario.addEventListener('submit', async (evento) => {
             evento.preventDefault();
             const email = document.getElementById('emailMiembro').value;
             const rol = document.getElementById('rolMiembro').value;
+            const limite = campoLimite ? campoLimite.value : '';
 
             try {
-                await agregarMiembro(email, rol);
+                await agregarMiembro(email, rol, limite);
                 formulario.reset();
+                if (selectorRol) {
+                    selectorRol.value = 'member';
+                    selectorRol.dispatchEvent(new Event('change'));
+                }
                 renderizarMiembros();
                 mostrarEstado(`Se agregó a ${email} como ${formatearRol(rol)}.`, 'ok');
             } catch (error) {

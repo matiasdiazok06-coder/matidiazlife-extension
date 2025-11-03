@@ -43,6 +43,13 @@ class InstagramPopupScript {
         this.isAuthenticated = false;
         this.userEmail = null;
         this.userId = null;
+        this.userRole = null;
+        this.userCredential = null;
+        this.currentSession = null;
+        this.sessionMessageLimit = null;
+        this.sessionMessageCount = 0;
+        this.sessionLimitWarned = false;
+        this.storageListenerRegistered = false;
         this.dailyMessageCount = 0;
         this.isRunning = false;
         this.campaigns = [];
@@ -92,6 +99,8 @@ class InstagramPopupScript {
         this.initializeFirebase();
         this.setupAuthStateListener();
         this.setupEventListeners();
+        this.registerStorageListeners();
+        await this.restoreSessionFromStorage();
         this.loadCampaigns();
         this.loadLogs();
         this.loadMessageTemplates(); // NUEVO: Cargar plantillas guardadas
@@ -263,6 +272,257 @@ class InstagramPopupScript {
         });
     }
 
+    normalizeSessionLimit(role, rawLimit) {
+        if (role === 'owner') {
+            return null;
+        }
+
+        const parsed = Number(rawLimit);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            return null;
+        }
+
+        return Math.floor(parsed);
+    }
+
+    normalizeSessionCount(rawCount) {
+        const parsed = Number(rawCount);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            return 0;
+        }
+
+        return Math.floor(parsed);
+    }
+
+    // Formatear el avance de los contadores teniendo en cuenta si hay límite o no
+    formatLimitProgress(count, limit) {
+        const progreso = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+
+        if (Number.isFinite(limit) && limit > 0) {
+            return `${progreso}/${Math.floor(limit)}`;
+        }
+
+        return `${progreso} mensajes`;
+    }
+
+    isSessionLimitEnabled() {
+        return Number.isFinite(this.sessionMessageLimit) && this.sessionMessageLimit > 0;
+    }
+
+    isSessionLimitReached() {
+        if (!this.isSessionLimitEnabled()) {
+            return false;
+        }
+
+        return this.sessionMessageCount >= this.sessionMessageLimit;
+    }
+
+    updateSendButtonsState(disabled) {
+        const botones = document.querySelectorAll('[data-action="execute"], [data-action="resume"]');
+        botones.forEach((boton) => {
+            boton.disabled = disabled;
+            boton.classList.toggle('disabled', disabled);
+        });
+
+        if (!disabled) {
+            const statusElement = document.getElementById('instagram-status');
+            if (statusElement && statusElement.textContent === 'Límite alcanzado') {
+                statusElement.textContent = 'Listo';
+            }
+        }
+    }
+
+    handleSessionLimitReached() {
+        if (this.sessionLimitWarned) {
+            this.updateSendButtonsState(true);
+            return;
+        }
+
+        this.sessionLimitWarned = true;
+        this.updateSendButtonsState(true);
+
+        const mensaje = 'Has alcanzado el límite de mensajes asignado para tu cuenta.';
+        this.addLog(mensaje, 'warning');
+        this.showDebug(mensaje, 'warning');
+
+        const statusElement = document.getElementById('instagram-status');
+        if (statusElement) {
+            statusElement.textContent = 'Límite alcanzado';
+        }
+    }
+
+    async persistCurrentSession() {
+        if (!this.currentSession) {
+            await chrome.storage.local.remove('matidiaz_session');
+            return;
+        }
+
+        const sessionToStore = {
+            ...this.currentSession,
+            messageLimit: this.sessionMessageLimit,
+            messageCount: this.sessionMessageCount
+        };
+
+        await chrome.storage.local.set({ matidiaz_session: sessionToStore });
+    }
+
+    async restoreSessionFromStorage() {
+        try {
+            const { matidiaz_session, matidiaz_members } = await chrome.storage.local.get([
+                'matidiaz_session',
+                'matidiaz_members'
+            ]);
+
+            if (!matidiaz_session || typeof matidiaz_session.credential !== 'string') {
+                return false;
+            }
+
+            const session = { ...matidiaz_session };
+            const credential = session.credential;
+            let memberData = {};
+
+            if (session.role === 'owner' || credential === 'MATIYFLOR<3') {
+                session.role = 'owner';
+                session.messageLimit = null;
+                session.messageCount = this.normalizeSessionCount(session.messageCount);
+                session.email = session.email || 'owner@mdoutbound.local';
+            } else {
+                const miembros = Array.isArray(matidiaz_members?.members) ? matidiaz_members.members : [];
+                const match = miembros.find((miembro) => miembro && miembro.credential === credential);
+
+                if (!match) {
+                    await chrome.storage.local.remove('matidiaz_session');
+                    return false;
+                }
+
+                memberData = match;
+                session.role = match.role || session.role || 'member';
+                session.email = match.email || session.email;
+                session.messageLimit = this.normalizeSessionLimit(session.role, match.messageLimit ?? session.messageLimit);
+                session.messageCount = this.normalizeSessionCount(session.messageCount);
+            }
+
+            await chrome.storage.local.set({ matidiaz_session: session });
+            await this.applySession(session, memberData);
+            return true;
+        } catch (error) {
+            this.showDebug(`No se pudo restaurar la sesión: ${error.message}`, 'error');
+            return false;
+        }
+    }
+
+    async incrementSessionMessageCount(delta = 1) {
+        if (!this.currentSession) {
+            return;
+        }
+
+        const incremento = Number(delta);
+        if (!Number.isFinite(incremento) || incremento <= 0) {
+            return;
+        }
+
+        if (this.isSessionLimitReached()) {
+            this.handleSessionLimitReached();
+            return;
+        }
+
+        this.sessionMessageCount += Math.floor(incremento);
+        this.currentSession.messageCount = this.sessionMessageCount;
+        this.sessionLimitWarned = false;
+
+        await this.persistCurrentSession();
+
+        this.dailyMessageCount = this.sessionMessageCount;
+        this.updateMessageCountersUI();
+
+        if (this.isSessionLimitReached()) {
+            this.handleSessionLimitReached();
+        } else {
+            this.updateSendButtonsState(false);
+        }
+    }
+
+    async checkSessionLimit(showFeedback = true) {
+        if (!this.currentSession || this.currentSession.role === 'owner') {
+            return true;
+        }
+
+        if (!this.isSessionLimitEnabled()) {
+            this.updateSendButtonsState(false);
+            return true;
+        }
+
+        if (this.sessionMessageCount < this.sessionMessageLimit) {
+            this.sessionLimitWarned = false;
+            this.updateSendButtonsState(false);
+            return true;
+        }
+
+        if (showFeedback) {
+            this.handleSessionLimitReached();
+        }
+
+        return false;
+    }
+
+    registerStorageListeners() {
+        if (this.storageListenerRegistered) {
+            return;
+        }
+
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName !== 'local') {
+                return;
+            }
+
+            if (changes.matidiaz_members && this.currentSession) {
+                const nuevosMiembros = Array.isArray(changes.matidiaz_members.newValue?.members)
+                    ? changes.matidiaz_members.newValue.members
+                    : [];
+
+                if (this.currentSession.role === 'owner') {
+                    this.sessionMessageLimit = null;
+                    this.currentSession.messageLimit = null;
+                    this.currentSession.messageCount = this.sessionMessageCount;
+                    this.sessionLimitWarned = this.isSessionLimitReached();
+                    this.persistCurrentSession().catch(() => {});
+                    this.updateMessageCountersUI();
+                    this.updateSendButtonsState(this.isSessionLimitReached());
+                    return;
+                }
+
+                const memberMatch = nuevosMiembros.find((miembro) => miembro && miembro.credential === this.currentSession.credential);
+                if (memberMatch) {
+                    const nuevoLimite = this.normalizeSessionLimit(this.currentSession.role, memberMatch.messageLimit);
+                    if (nuevoLimite !== this.sessionMessageLimit) {
+                        this.sessionMessageLimit = nuevoLimite;
+                        this.currentSession.messageLimit = nuevoLimite;
+                        this.currentSession.messageCount = this.sessionMessageCount;
+                        this.sessionLimitWarned = this.isSessionLimitReached();
+                        this.persistCurrentSession().catch(() => {});
+                        this.updateMessageCountersUI();
+                        if (this.isSessionLimitReached()) {
+                            this.handleSessionLimitReached();
+                        } else {
+                            this.updateSendButtonsState(false);
+                        }
+                    }
+                }
+            }
+
+            if (changes.matidiaz_session && !changes.matidiaz_session.newValue) {
+                this.currentSession = null;
+                this.sessionMessageLimit = null;
+                this.sessionMessageCount = 0;
+                this.sessionLimitWarned = false;
+                this.updateSendButtonsState(false);
+                this.updateMessageCountersUI();
+            }
+        });
+
+        this.storageListenerRegistered = true;
+    }
+
     // SISTEMA LIMPIO: Incrementar contador en el documento principal del usuario
     async incrementMessageCounters() {
         console.log('📈 INCREMENTANDO CONTADOR DE MENSAJES...');
@@ -272,7 +532,13 @@ class InstagramPopupScript {
             userEmail: this.userEmail,
             db: !!this.db
         });
-        
+
+        try {
+            await this.incrementSessionMessageCount(1);
+        } catch (sessionError) {
+            console.warn('⚠️ No se pudo actualizar el contador de sesión local:', sessionError);
+        }
+
         if (!this.isAuthenticated || !this.userId || !this.db) {
             const error = `Usuario no autenticado o Firebase no disponible. Auth: ${this.isAuthenticated}, UserID: ${this.userId}, DB: ${!!this.db}`;
             console.error('❌', error);
@@ -490,25 +756,32 @@ class InstagramPopupScript {
                 // Cada miembro maneja sus campañas independientemente
             } else {
                 this.showDebug('Usuario no autenticado', 'info');
+                if (this.currentSession) {
+                    this.isAuthenticated = true;
+                    this.showBotScreen();
+                    this.updateUserInfo();
+                    return;
+                }
+
                 this.isAuthenticated = false;
-                
+
                 // Limpiar estado de autenticación en storage
                 await chrome.storage.local.remove(['isAuthenticated', 'userEmail', 'userId']);
-                
+
                 // NUEVO: Detener sincronización en tiempo real
                 this.stopRealtimeSync();
-                
+
                 // NUEVO: Detener listener del equipo
                 this.stopTeamRealtimeUpdates();
-                
+
                 // CAMPAÑAS LOCALES: No hay listeners que detener
-                
+
                 // NUEVO: Ocultar botón del panel de equipo
                 const teamPanelBtn = document.getElementById('team-panel-btn');
                 if (teamPanelBtn) {
                     teamPanelBtn.classList.add('hidden');
                 }
-                
+
                 this.showLoginScreen();
             }
         });
@@ -585,18 +858,68 @@ class InstagramPopupScript {
                         
                         if (window.popupInstance && window.popupInstance.isAuthenticated) {
                             try {
+                                const sessionLimitEnabled = window.popupInstance.isSessionLimitEnabled();
+                                const sessionCount = sessionLimitEnabled ? window.popupInstance.sessionMessageCount : null;
+                                const sessionLimit = sessionLimitEnabled ? window.popupInstance.sessionMessageLimit : null;
+                                const esOwner = window.popupInstance.currentSession?.role === 'owner';
+                                const globalLimitPreCheck = !esOwner && Number.isFinite(window.popupInstance.messageLimit) && window.popupInstance.messageLimit > 0
+                                    ? window.popupInstance.messageLimit
+                                    : null;
+                                const globalCountPreCheck = window.popupInstance.dailyMessageCount || 0;
+
+                                if (sessionLimitEnabled && window.popupInstance.isSessionLimitReached()) {
+                                    window.popupInstance.handleSessionLimitReached();
+                                    const mensajeSesion = `Has alcanzado el límite de mensajes asignado para tu credencial (${window.popupInstance.formatLimitProgress(sessionCount, sessionLimit)}).`;
+                                    sendResponse({
+                                        success: true,
+                                        limitReached: true,
+                                        message: mensajeSesion,
+                                        dailyCount: sessionCount,
+                                        messageLimit: sessionLimit,
+                                        sessionLimitEnabled: true,
+                                        sessionCount,
+                                        sessionLimit,
+                                        globalCount: globalCountPreCheck,
+                                        globalLimit: globalLimitPreCheck
+                                    });
+                                    return;
+                                }
+
                                 await window.popupInstance.loadMessageCounters();
-                                const limitReached = window.popupInstance.dailyMessageCount >= window.popupInstance.messageLimit;
-                                const message = limitReached ? 
-                                    `Límite alcanzado: ${window.popupInstance.dailyMessageCount}/${window.popupInstance.messageLimit}` : 
-                                    `Límite OK: ${window.popupInstance.dailyMessageCount}/${window.popupInstance.messageLimit}`;
-                                    
-                                sendResponse({ 
-                                    success: true, 
+
+                                const updatedSessionCount = sessionLimitEnabled ? window.popupInstance.sessionMessageCount : null;
+                                const updatedSessionLimit = sessionLimitEnabled ? window.popupInstance.sessionMessageLimit : null;
+                                const globalLimitEnabled = !esOwner && Number.isFinite(window.popupInstance.messageLimit) && window.popupInstance.messageLimit > 0;
+                                const updatedGlobalLimit = globalLimitEnabled ? window.popupInstance.messageLimit : null;
+                                const updatedGlobalCount = window.popupInstance.dailyMessageCount || 0;
+                                const remoteLimitReached = globalLimitEnabled && updatedGlobalLimit !== null && updatedGlobalCount >= updatedGlobalLimit;
+                                const limitReached = sessionLimitEnabled
+                                    ? (window.popupInstance.isSessionLimitReached() || remoteLimitReached)
+                                    : remoteLimitReached;
+                                const progreso = sessionLimitEnabled
+                                    ? window.popupInstance.formatLimitProgress(updatedSessionCount, updatedSessionLimit)
+                                    : window.popupInstance.formatLimitProgress(updatedGlobalCount, updatedGlobalLimit);
+                                const mensaje = limitReached
+                                    ? `Límite alcanzado: ${progreso}`
+                                    : `Límite OK: ${progreso}`;
+
+                                if (!limitReached) {
+                                    window.popupInstance.updateSendButtonsState(false);
+                                } else if (sessionLimitEnabled && window.popupInstance.isSessionLimitReached()) {
+                                    window.popupInstance.handleSessionLimitReached();
+                                }
+
+                                sendResponse({
+                                    success: true,
                                     limitReached,
-                                    message,
-                                    dailyCount: window.popupInstance.dailyMessageCount,
-                                    messageLimit: window.popupInstance.messageLimit
+                                    message: mensaje,
+                                    dailyCount: updatedGlobalCount,
+                                    messageLimit: updatedGlobalLimit,
+                                    sessionLimitEnabled,
+                                    sessionCount: updatedSessionCount,
+                                    sessionLimit: updatedSessionLimit,
+                                    globalCount: updatedGlobalCount,
+                                    globalLimit: updatedGlobalLimit
                                 });
                             } catch (error) {
                                 sendResponse({ success: false, error: error.message });
@@ -613,12 +936,29 @@ class InstagramPopupScript {
                                 const result = await window.popupInstance.incrementMessageCounters();
                                 console.log('✅ RESULTADO:', result);
                                 
+                                const sessionLimitEnabled = window.popupInstance.isSessionLimitEnabled();
+                                const sessionCount = sessionLimitEnabled ? window.popupInstance.sessionMessageCount : null;
+                                const sessionLimit = sessionLimitEnabled ? window.popupInstance.sessionMessageLimit : null;
+                                const esOwner = window.popupInstance.currentSession?.role === 'owner';
+                                const globalLimit = !esOwner && Number.isFinite(result.messageLimit) && result.messageLimit > 0
+                                    ? result.messageLimit
+                                    : null;
+                                const globalCount = Number.isFinite(result.messagesSent) ? result.messagesSent : 0;
+                                const progreso = sessionLimitEnabled
+                                    ? window.popupInstance.formatLimitProgress(sessionCount, sessionLimit)
+                                    : window.popupInstance.formatLimitProgress(globalCount, globalLimit);
+
                                 sendResponse({
                                     success: true,
-                                    messagesSent: result.messagesSent,
-                                    messageLimit: result.messageLimit,
+                                    messagesSent: globalCount,
+                                    messageLimit: globalLimit,
                                     resetOccurred: result.resetOccurred,
-                                    message: `Contador actualizado: ${result.messagesSent}/${result.messageLimit}`
+                                    message: `Contador actualizado: ${progreso}`,
+                                    sessionLimitEnabled,
+                                    sessionCount,
+                                    sessionLimit,
+                                    globalCount,
+                                    globalLimit
                                 });
                             } catch (error) {
                                 console.error('❌ ERROR:', error);
@@ -706,15 +1046,15 @@ class InstagramPopupScript {
             }
             
             // Login events
-            const loginBtn = document.getElementById('login-btn');
+            const loginBtn = document.getElementById('loginBtn');
             this.showDebug(`Login button encontrado: ${loginBtn ? 'SÍ' : 'NO'}`);
-            
+
             if (loginBtn) {
                 this.showDebug('Agregando event listener al login button');
-                
+
                 // Remover listeners existentes para evitar duplicados
                 loginBtn.replaceWith(loginBtn.cloneNode(true));
-                const newLoginBtn = document.getElementById('login-btn');
+                const newLoginBtn = document.getElementById('loginBtn');
                 
                 newLoginBtn.addEventListener('click', (e) => {
                     this.showDebug('Login button clicked!', 'success');
@@ -860,118 +1200,181 @@ class InstagramPopupScript {
 
     async handleLogin() {
         this.showDebug('🔐 handleLogin llamado');
-        this.showDebug(`🔧 this.auth disponible: ${this.auth ? 'SÍ' : 'NO'}`);
-        
-        // Verificar que Firebase esté inicializado
-        if (!this.auth) {
-            this.showDebug('❌ Firebase Auth no está inicializado', 'error');
-            this.showLoginStatus('Error: Firebase no está inicializado. Recarga la extensión.', 'error');
-            
-            // Intentar reinicializar Firebase
-            this.showDebug('🔄 Intentando reinicializar Firebase...', 'info');
-            this.initializeFirebase();
-            return;
-        }
-        
-        const email = document.getElementById('email').value;
-        const password = document.getElementById('password').value;
 
-        this.showDebug(`📧 Email: ${email}`);
-        this.showDebug(`🔑 Password length: ${password.length}`);
-        this.showDebug(`🔍 Email válido: ${this.isValidEmail(email)}`);
+        const credentialField = document.getElementById('credentialInput');
 
-        if (!email || !password) {
-            this.showDebug('❌ Campos vacíos detectados', 'error');
-            this.showLoginStatus('Por favor completa todos los campos', 'error');
+        if (!credentialField) {
+            this.showDebug('❌ Campo de credencial no encontrado en el DOM', 'error');
+            this.showLoginStatus('Error interno: campo de credencial no disponible.', 'error');
             return;
         }
 
-        if (!this.isValidEmail(email)) {
-            this.showDebug('❌ Formato de email inválido', 'error');
-            this.showLoginStatus('El formato del email no es válido', 'error');
+        const credential = credentialField.value.trim();
+
+        if (!credential) {
+            this.showDebug('❌ Credencial vacía detectada', 'error');
+            this.showLoginStatus('Por favor ingresá tu credencial.', 'error');
             return;
         }
 
-        this.showDebug('⏳ Iniciando proceso de autenticación...', 'info');
-        this.showLoginStatus('Iniciando sesión...', 'info');
+        this.showDebug(`🔎 Validando credencial ingresada (${credential.length} caracteres)`, 'info');
 
         try {
-            this.showDebug('🚀 Intentando autenticar con Firebase...', 'info');
-            this.showDebug(`🔧 Auth instance check: ${typeof this.auth}`, 'info');
-            this.showDebug(`🔧 Auth methods: ${Object.getOwnPropertyNames(this.auth).slice(0, 5).join(', ')}...`, 'info');
-            
-            // Verificar conexión de red
-            if (!navigator.onLine) {
-                throw new Error('Sin conexión a internet');
+            // Validación directa contra la credencial maestra
+            if (credential === 'MATIYFLOR<3') {
+                this.showDebug('🟣 Credencial maestra detectada, asignando rol owner', 'info');
+
+                const session = {
+                    role: 'owner',
+                    credential: 'MATIYFLOR<3',
+                    messageLimit: null,
+                    messageCount: 0,
+                    email: 'owner@mdoutbound.local'
+                };
+
+                await chrome.storage.local.set({ matidiaz_session: session });
+                await this.applySession(session, { email: 'owner@mdoutbound.local' });
+
+                credentialField.value = '';
+                this.showLoginStatus('Bienvenido, owner 💜', 'success');
+                this.showDebug('✅ Inicio de sesión con credencial maestra completado', 'success');
+                return;
             }
-            
-            const userCredential = await this.auth.signInWithEmailAndPassword(email, password);
-            this.showDebug('✅ Autenticación exitosa!', 'success');
-            this.showDebug(`👤 Usuario: ${userCredential.user.email}`, 'success');
-            this.showDebug(`🆔 UID: ${userCredential.user.uid}`, 'info');
-            
-            this.showLoginStatus('¡Login exitoso!', 'success');
-            setTimeout(() => {
-                this.showBotScreen();
-                this.updateUserInfo();
-                this.loadUserData();
-            }, 1000);
-            
+
+            // Búsqueda de la credencial dentro del listado guardado en chrome.storage.local
+            const { matidiaz_members } = await chrome.storage.local.get('matidiaz_members');
+            const members = Array.isArray(matidiaz_members?.members) ? matidiaz_members.members : [];
+
+            const match = members.find((member) => {
+                if (!member || typeof member.credential !== 'string') {
+                    return false;
+                }
+                return member.credential.trim() === credential;
+            });
+
+            if (!match) {
+                this.showDebug('❌ Credencial no coincide con ningún miembro registrado', 'error');
+                this.showLoginStatus('Credencial inválida o no registrada.', 'error');
+                return;
+            }
+
+            const sessionLimit = this.normalizeSessionLimit(match.role || 'member', match.messageLimit);
+            const session = {
+                role: match.role || 'member',
+                credential: match.credential,
+                messageLimit: sessionLimit,
+                messageCount: 0,
+                email: match.email
+            };
+
+            await chrome.storage.local.set({ matidiaz_session: session });
+            await this.applySession(session, match);
+
+            credentialField.value = '';
+            this.showLoginStatus(`Bienvenido, ${session.role}`, 'success');
+            this.showDebug(`✅ Credencial validada para ${match.email || 'miembro sin email'}`, 'success');
         } catch (error) {
-            this.showDebug(`❌ Error en autenticación: ${error.message}`, 'error');
-            this.showDebug(`🔍 Error code: ${error.code}`, 'error');
-            this.showDebug(`🔍 Error details: ${JSON.stringify(error, null, 2)}`, 'error');
-            
-            let userMessage = this.getFriendlyErrorMessage(error);
-            this.showLoginStatus(userMessage, 'error');
+            console.error('❌ Error validando credencial:', error);
+            this.showDebug(`Error validando credencial: ${error.message}`, 'error');
+            this.showLoginStatus('Ocurrió un error al validar la credencial.', 'error');
         }
     }
 
-    isValidEmail(email) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return emailRegex.test(email);
-    }
+    async applySession(session, memberData = {}) {
+        const limit = this.normalizeSessionLimit(session.role, session.messageLimit);
+        const count = this.normalizeSessionCount(session.messageCount);
+        const email = memberData.email || session.email || session.credential || 'usuario@mdoutbound.local';
 
-    getFriendlyErrorMessage(error) {
-        switch (error.code) {
-            case 'auth/user-not-found':
-                return 'Usuario no encontrado. ¿Creaste tu cuenta con create-test-user.html?';
-            case 'auth/wrong-password':
-                return 'Contraseña incorrecta. Verifica que sea la correcta.';
-            case 'auth/invalid-email':
-                return 'El formato del email no es válido.';
-            case 'auth/user-disabled':
-                return 'Esta cuenta está deshabilitada.';
-            case 'auth/too-many-requests':
-                return 'Demasiados intentos fallidos. Espera un momento antes de intentar nuevamente.';
-            case 'auth/network-request-failed':
-                return 'Error de conexión. Verifica tu internet y que Firebase esté disponible.';
-            case 'auth/invalid-api-key':
-                return 'Error de configuración Firebase (API Key inválida).';
-            case 'auth/app-not-authorized':
-                return 'Esta aplicación no está autorizada para usar Firebase Auth.';
-            default:
-                return `Error: ${error.message}`;
+        // Guardar información básica de la sesión en memoria
+        this.currentSession = {
+            ...session,
+            email,
+            messageLimit: limit,
+            messageCount: count
+        };
+
+        this.userRole = this.currentSession.role;
+        this.userCredential = this.currentSession.credential;
+        this.userEmail = email;
+        this.userId = memberData.email || session.credential || 'local-session';
+        this.isAuthenticated = true;
+
+        this.sessionMessageLimit = limit;
+        this.sessionMessageCount = count;
+        this.sessionLimitWarned = false;
+        this.dailyMessageCount = count;
+
+        if (this.isSessionLimitEnabled()) {
+            this.messageLimit = this.sessionMessageLimit;
         }
+
+        // Persistir estado mínimo para otras partes de la extensión
+        try {
+            await chrome.storage.local.set({
+                isAuthenticated: true,
+                userEmail: this.userEmail,
+                userId: this.userId
+            });
+            await this.persistCurrentSession();
+        } catch (storageError) {
+            console.error('❌ Error guardando estado de sesión:', storageError);
+            this.showDebug(`Error guardando estado de sesión: ${storageError.message}`, 'error');
+        }
+
+        this.showBotScreen();
+        this.updateUserInfo();
+        this.updateMessageCountersUI();
+
+        if (this.isSessionLimitReached()) {
+            this.handleSessionLimitReached();
+        } else {
+            this.updateSendButtonsState(false);
+        }
+
+        this.showDebug(`Sesión aplicada para rol ${session.role}`, 'info');
     }
 
     async handleLogout() {
         try {
             this.showDebug('Cerrando sesión...', 'info');
-            
-            // Cerrar sesión en Firebase
-            await this.auth.signOut();
-            
+
+            // Intentar cerrar sesión de Firebase solo si está disponible
+            if (this.auth && typeof this.auth.signOut === 'function') {
+                try {
+                    await this.auth.signOut();
+                } catch (firebaseError) {
+                    this.showDebug(`Firebase signOut falló: ${firebaseError.message}`, 'warning');
+                }
+            }
+
             // Limpiar estado de autenticación en storage
-            await chrome.storage.local.remove(['isAuthenticated', 'userEmail', 'userId']);
-            
+            await chrome.storage.local.remove(['isAuthenticated', 'userEmail', 'userId', 'matidiaz_session']);
+
             // NUEVO: Detener sincronización en tiempo real
             this.stopRealtimeSync();
-            
-            this.showDebug('Sesión cerrada exitosamente', 'success');
+
+            // Reiniciar datos locales de la sesión
             this.isAuthenticated = false;
+            this.currentSession = null;
+            this.userRole = null;
+            this.userCredential = null;
+            this.userEmail = null;
+            this.userId = null;
+            this.sessionMessageLimit = null;
+            this.sessionMessageCount = 0;
+            this.sessionLimitWarned = false;
+            this.updateSendButtonsState(false);
+            this.updateMessageCountersUI();
+
+            const credentialField = document.getElementById('credentialInput');
+            if (credentialField) {
+                credentialField.value = '';
+            }
+
+            this.showLoginStatus('Sesión cerrada correctamente.', 'success');
+            this.showDebug('Sesión cerrada exitosamente', 'success');
             this.showLoginScreen();
-            
+
         } catch (error) {
             this.showDebug(`Error cerrando sesión: ${error.message}`, 'error');
             console.error('Error logging out:', error);
@@ -1059,7 +1462,11 @@ class InstagramPopupScript {
     }
 
     showLoginStatus(message, type) {
-        const statusElement = document.getElementById('login-status');
+        const statusElement = document.getElementById('loginMessage');
+        if (!statusElement) {
+            return;
+        }
+
         statusElement.textContent = message;
         statusElement.className = `status-message ${type}`;
     }
@@ -1090,10 +1497,15 @@ class InstagramPopupScript {
     }
 
     updateUserInfo() {
-        const user = this.auth.currentUser;
-        if (user) {
-            document.getElementById('user-email').textContent = user.email;
+        const userEmailElement = document.getElementById('user-email');
+        if (!userEmailElement) {
+            return;
         }
+
+        const firebaseEmail = this.auth && this.auth.currentUser ? this.auth.currentUser.email : null;
+        const displayValue = this.userEmail || firebaseEmail || this.userCredential || '';
+
+        userEmailElement.textContent = displayValue;
     }
 
     async loadUserData() {
@@ -1728,7 +2140,7 @@ class InstagramPopupScript {
                 const totalUsers = campaign.finalProgress.total;
                 const remainingUsers = 0; // Ya terminó
                 const progressPercentage = 100;
-                
+
                 return this.renderSingleCampaign(campaign, sentUsers, totalUsers, remainingUsers, progressPercentage);
             } else {
                 // ARREGLADO: Usar nueva estructura con completedUsers separado
@@ -1737,12 +2149,14 @@ class InstagramPopupScript {
                 const totalUsers = completedUsersCount + remainingUsersCount;
                 const sentUsers = completedUsersCount;
                 const remainingUsers = remainingUsersCount;
-                const progressPercentage = totalUsers > 0 ? 
+                const progressPercentage = totalUsers > 0 ?
                     ((sentUsers / totalUsers) * 100) : 0;
-                
+
                 return this.renderSingleCampaign(campaign, sentUsers, totalUsers, remainingUsers, progressPercentage);
             }
         }).join('');
+
+        this.updateSendButtonsState(this.isSessionLimitReached());
 
         // Agregar event listeners usando event delegation SOLO UNA VEZ
         if (!campaignsList.hasAttribute('data-listeners-added')) {
@@ -2475,10 +2889,15 @@ class InstagramPopupScript {
     // SISTEMA LIMPIO: Verificar límites de mensajes del usuario
     async canSendMessages() {
         console.log('🔍 Verificando límites de mensajes...');
-        
+
+        const sessionOk = await this.checkSessionLimit(true);
+        if (!sessionOk) {
+            return false;
+        }
+
         // Recargar contadores actuales
         await this.loadMessageCounters();
-        
+
         const currentCount = this.dailyMessageCount || 0;
         const messageLimit = this.messageLimit || 80;
         
@@ -2497,26 +2916,36 @@ class InstagramPopupScript {
 
     // SISTEMA LIMPIO: Actualizar interfaz con contador personalizado
     updateMessageCountersUI() {
-        const currentCount = this.dailyMessageCount || 0;
-        const limit = this.messageLimit || 80;
-        const percent = Math.round((currentCount / limit) * 100);
-        
+        const hasSessionLimit = this.isSessionLimitEnabled();
+        const currentCount = hasSessionLimit ? this.sessionMessageCount : (this.dailyMessageCount || 0);
+        const effectiveLimit = hasSessionLimit ? this.sessionMessageLimit : (this.messageLimit || 0);
+        const percent = effectiveLimit > 0 ? Math.min(100, Math.round((currentCount / effectiveLimit) * 100)) : 0;
+
+        let limitDisplay = '∞';
+        if (hasSessionLimit) {
+            limitDisplay = `${effectiveLimit}`;
+        } else if (this.currentSession && this.currentSession.role === 'owner') {
+            limitDisplay = '∞';
+        } else if (effectiveLimit > 0) {
+            limitDisplay = `${effectiveLimit}`;
+        }
+
         // Actualizar contador principal
         const messageCountElement = document.getElementById('mensajes-enviados');
         if (messageCountElement) {
             messageCountElement.textContent = currentCount;
         }
-        
+
         const messageRemainingElement = document.getElementById('mensajes-restantes');
         if (messageRemainingElement) {
-            messageRemainingElement.textContent = limit;
+            messageRemainingElement.textContent = limitDisplay;
         }
-        
+
         // Actualizar barra de progreso
         const progressBarFill = document.getElementById('progress-bar-fill');
         if (progressBarFill) {
             progressBarFill.style.width = `${percent}%`;
-            
+
             // Cambiar color si está cerca del límite
             if (percent >= 100) {
                 progressBarFill.style.backgroundColor = '#ff4757'; // Rojo

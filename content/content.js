@@ -32,6 +32,15 @@ if (window.ALL_INSTANCES) {
 window.ALL_INSTANCES.push(SCRIPT_INSTANCE_ID);
 console.log(`📋 Instancias registradas: ${window.ALL_INSTANCES.length} | Activa: ${SCRIPT_INSTANCE_ID}`);
 
+// Formatear el progreso de mensajes respetando si existe un límite definido
+const formatLimitProgress = (count, limit) => {
+    const progreso = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+    if (Number.isFinite(limit) && limit > 0) {
+        return `${progreso}/${Math.floor(limit)}`;
+    }
+    return `${progreso} mensajes`;
+};
+
 // Estado global del bot
 const InstagramBot = {
     isActive: false,
@@ -476,7 +485,23 @@ InstagramBot.processUser = async function(username, message) {
         try {
             const checkResult = await chrome.runtime.sendMessage({ action: 'checkGlobalLimit' });
             if (checkResult && checkResult.limitReached) {
-                await this.sendLogToPopup(`🚫 [LÍMITE] ${checkResult.message}`, 'error');
+                const {
+                    message,
+                    sessionLimitEnabled,
+                    sessionCount,
+                    sessionLimit,
+                    globalCount,
+                    globalLimit
+                } = checkResult;
+
+                const detalle = sessionLimitEnabled && Number.isFinite(sessionLimit) && sessionLimit > 0 && Number.isFinite(sessionCount)
+                    ? `Límite por credencial alcanzado: ${formatLimitProgress(sessionCount, sessionLimit)}`
+                    : Number.isFinite(globalLimit) && globalLimit > 0 && Number.isFinite(globalCount)
+                        ? `Límite global alcanzado: ${formatLimitProgress(globalCount, globalLimit)}`
+                        : 'Límite de mensajes alcanzado para tu cuenta.';
+                const mensajeFinal = message || detalle;
+
+                await this.sendLogToPopup(`🚫 [LÍMITE] ${mensajeFinal}`, 'error');
                 await this.sendLogToPopup(`⚠️ [LÍMITE] Mensaje enviado pero límite alcanzado. Deteniendo campaña.`, 'warning');
                 this.isActive = false;
                 return false;
@@ -484,7 +509,7 @@ InstagramBot.processUser = async function(username, message) {
         } catch (error) {
             await this.sendLogToPopup(`⚠️ [VERIFICACIÓN] Error verificando límites: ${error.message}`, 'warning');
         }
-        
+
         // PASO 9: Actualizar progreso y confirmar éxito
         await this.sendLogToPopup(`✅ [FIN] Mensaje enviado exitosamente a @${username}`, 'success');
         
@@ -500,27 +525,63 @@ InstagramBot.processUser = async function(username, message) {
             console.log('🔄 CONTENT: Respuesta recibida:', response);
             
             if (response && response.success) {
-                console.log(`✅ Contadores incrementados: Local ${response.localCount}/10, Global ${response.globalCount}/80`);
-                await this.sendLogToPopup(`📈 [CONTADORES] ${response.message}`, 'success');
-                
-                // Verificar límites
-                if (response.localCount >= 10) {
-                    await this.sendLogToPopup(`🚫 [LÍMITE] Límite local alcanzado: ${response.localCount}/10`, 'warning');
-                    await this.sendLogToPopup(`💡 [LÍMITE] Abre otro navegador para continuar`, 'info');
+                const {
+                    message,
+                    resetOccurred,
+                    sessionLimitEnabled,
+                    sessionCount,
+                    sessionLimit,
+                    globalCount,
+                    globalLimit
+                } = response;
+
+                const progresoCredencial = sessionLimitEnabled
+                    ? formatLimitProgress(sessionCount, sessionLimit)
+                    : 'sin límite';
+                const progresoGlobal = formatLimitProgress(globalCount, globalLimit);
+
+                console.log(`✅ Contadores incrementados · Credencial: ${progresoCredencial} · Global: ${progresoGlobal}`);
+
+                if (message) {
+                    await this.sendLogToPopup(`📈 [CONTADORES] ${message}`, 'success');
+                } else if (sessionLimitEnabled) {
+                    await this.sendLogToPopup(`📈 [CONTADORES] Contador de tu credencial: ${progresoCredencial}`, 'success');
+                } else {
+                    await this.sendLogToPopup(`📈 [CONTADORES] Contador global: ${progresoGlobal}`, 'success');
+                }
+
+                if (resetOccurred) {
+                    await this.sendLogToPopup('🔄 [CONTADORES] El contador global se reseteó automáticamente (nuevo día).', 'info');
+                }
+
+                const limiteCredencialAlcanzado = sessionLimitEnabled
+                    && Number.isFinite(sessionLimit)
+                    && sessionLimit > 0
+                    && Number.isFinite(sessionCount)
+                    && sessionCount >= sessionLimit;
+
+                if (limiteCredencialAlcanzado) {
+                    await this.sendLogToPopup(`🚫 [LÍMITE] Límite por credencial alcanzado: ${progresoCredencial}`, 'warning');
+                    await this.sendLogToPopup('💡 [LÍMITE] Pedile al owner que amplíe tu cupo o espera a que se reinicie.', 'info');
                     this.isActive = false;
                 }
-                
-                if (response.globalCount >= 80) {
-                    await this.sendLogToPopup(`🚫 [LÍMITE] Límite global alcanzado: ${response.globalCount}/80`, 'warning');
-                    await this.sendLogToPopup(`⏰ [LÍMITE] Se resetea mañana a las 00:00 Argentina`, 'info');
+
+                const limiteGlobalAlcanzado = Number.isFinite(globalLimit)
+                    && globalLimit > 0
+                    && Number.isFinite(globalCount)
+                    && globalCount >= globalLimit;
+
+                if (limiteGlobalAlcanzado) {
+                    await this.sendLogToPopup(`🚫 [LÍMITE] Límite global alcanzado: ${progresoGlobal}`, 'warning');
+                    await this.sendLogToPopup('⏰ [LÍMITE] Se resetea mañana a las 00:00 (Argentina).', 'info');
                     this.isActive = false;
                 }
-                
+
             } else {
                 console.log(`⚠️ Error incrementando contadores:`, response);
                 await this.sendLogToPopup(`⚠️ [CONTADORES] Error: ${response?.error || 'Sin respuesta'}`, 'warning');
             }
-            
+
         } catch (error) {
             console.log(`⚠️ Error crítico enviando mensaje:`, error);
             await this.sendLogToPopup(`⚠️ [CONTADORES] Error crítico: ${error.message}`, 'warning');

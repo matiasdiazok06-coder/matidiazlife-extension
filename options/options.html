@@ -44,7 +44,7 @@
             font-weight: 500;
         }
 
-        input[type="email"], select {
+        input[type="email"], input[type="number"], select {
             width: 100%;
             padding: 12px;
             border: 1px solid #d0d7de;
@@ -60,7 +60,7 @@
             cursor: not-allowed;
         }
 
-        input[type="email"]:focus, select:focus {
+        input[type="email"]:focus, input[type="number"]:focus, select:focus {
             border-color: #3a86ff;
             outline: none;
             box-shadow: 0 0 0 2px rgba(58, 134, 255, 0.2);
@@ -190,7 +190,7 @@
                 border: 1px solid rgba(148, 163, 184, 0.15);
             }
 
-            input[type="email"], select {
+            input[type="email"], input[type="number"], select {
                 background: #0f172a;
                 border: 1px solid #334155;
                 color: #f8fafc;
@@ -258,6 +258,9 @@
                     <option value="owner">Owner</option>
                 </select>
 
+                <label for="messageLimit">Límite de mensajes</label>
+                <input type="number" id="messageLimit" name="messageLimit" placeholder="Ej: 100" min="1" step="1" required>
+
                 <button type="submit" id="btnAgregar">Agregar miembro</button>
                 <p class="nota">Sólo el owner puede agregar personas o asignar el rol owner.</p>
             </form>
@@ -272,12 +275,13 @@
                         <th>Email</th>
                         <th>Credencial</th>
                         <th>Rol</th>
+                        <th>Límite</th>
                         <th>Acciones</th>
                     </tr>
                 </thead>
                 <tbody id="listaMiembros">
                     <tr>
-                        <td colspan="4">Sin miembros registrados todavía.</td>
+                        <td colspan="5">Sin miembros registrados todavía.</td>
                     </tr>
                 </tbody>
             </table>
