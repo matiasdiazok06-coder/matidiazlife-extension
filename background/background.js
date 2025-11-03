@@ -58,7 +58,11 @@ class MdOutboundBackgroundScript {
                     break;
 
                 case 'matidiaz_addMember':
-                    await this.addMember(request.payload?.email, request.payload?.role);
+                    await this.addMember(
+                        request.payload?.email,
+                        request.payload?.role,
+                        request.payload?.messageLimit
+                    );
                     sendResponse({ success: true });
                     break;
 
@@ -167,7 +171,7 @@ class MdOutboundBackgroundScript {
         return estructura;
     }
 
-    async addMember(email, role) {
+    async addMember(email, role, messageLimit) {
         if (!email) {
             throw new Error('El email es obligatorio para agregar miembros.');
         }
@@ -190,9 +194,14 @@ class MdOutboundBackgroundScript {
         const credencialesUsadas = new Set(datos.members.map(miembro => miembro.credential).filter(Boolean));
         const credential = this.generateUniqueCredential(credencialesUsadas);
 
+        const limit = this.normalizeMessageLimit(messageLimit, role);
+
         const actualizados = this.normalizeTeamData({
             owner: datos.owner,
-            members: [...datos.members, { email: limpio, role: role || 'member', credential }]
+            members: [
+                ...datos.members,
+                { email: limpio, role: role || 'member', credential, messageLimit: limit }
+            ]
         });
 
         await this.writeTeamStorage(actualizados);
@@ -224,12 +233,19 @@ class MdOutboundBackgroundScript {
 
         const miembrosActualizados = datos.members.map(miembro => {
             if (miembro.email === limpio) {
-                return { ...miembro, role: 'owner' };
+                return { ...miembro, role: 'owner', messageLimit: null };
             }
             if (miembro.role === 'owner') {
-                return { ...miembro, role: 'admin' };
+                return {
+                    ...miembro,
+                    role: 'admin',
+                    messageLimit: this.normalizeMessageLimit(miembro.messageLimit, 'admin')
+                };
             }
-            return miembro;
+            return {
+                ...miembro,
+                messageLimit: this.normalizeMessageLimit(miembro.messageLimit, miembro.role)
+            };
         });
 
         const existe = miembrosActualizados.some(miembro => miembro.email === limpio);
@@ -238,7 +254,8 @@ class MdOutboundBackgroundScript {
             miembrosActualizados.push({
                 email: limpio,
                 role: 'owner',
-                credential: this.generateUniqueCredential(credencialesUsadas)
+                credential: this.generateUniqueCredential(credencialesUsadas),
+                messageLimit: null
             });
         }
 
@@ -267,7 +284,8 @@ class MdOutboundBackgroundScript {
                 } else {
                     credencialesUsadas.add(credential);
                 }
-                return { email, role, credential };
+                const messageLimit = this.normalizeMessageLimit(item.messageLimit, role);
+                return { email, role, credential, messageLimit };
             });
 
         const resultado = { owner, members: lista };
@@ -276,17 +294,25 @@ class MdOutboundBackgroundScript {
             resultado.members.push({
                 email: owner,
                 role: 'owner',
-                credential: this.generateUniqueCredential(credencialesUsadas)
+                credential: this.generateUniqueCredential(credencialesUsadas),
+                messageLimit: null
             });
         } else {
             resultado.members = resultado.members.map(miembro => {
                 if (miembro.email === owner) {
-                    return { ...miembro, role: 'owner' };
+                    return { ...miembro, role: 'owner', messageLimit: null };
                 }
                 if (miembro.role === 'owner') {
-                    return { ...miembro, role: 'admin' };
+                    return {
+                        ...miembro,
+                        role: 'admin',
+                        messageLimit: this.normalizeMessageLimit(miembro.messageLimit, 'admin')
+                    };
                 }
-                return miembro;
+                return {
+                    ...miembro,
+                    messageLimit: this.normalizeMessageLimit(miembro.messageLimit, miembro.role)
+                };
             });
         }
 
@@ -344,6 +370,25 @@ class MdOutboundBackgroundScript {
         }
 
         return { valid: true, ownerBypass: false };
+    }
+
+    normalizeMessageLimit(value, role) {
+        if (role === 'owner') {
+            return null;
+        }
+
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value < 0 ? null : Math.floor(value);
+        }
+
+        if (typeof value === 'string' && value.trim() !== '') {
+            const parsed = Number(value.trim());
+            if (Number.isFinite(parsed)) {
+                return parsed < 0 ? null : Math.floor(parsed);
+            }
+        }
+
+        return null;
     }
 
     readTeamStorage() {
